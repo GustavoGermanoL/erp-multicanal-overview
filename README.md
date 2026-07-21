@@ -322,31 +322,7 @@ Na primeira subida, o Flyway aplica as 80 migrações automaticamente. As integr
 
 ---
 
-## 11. Screenshots
-
-> Espaços reservados — inserir imagens depois.
-
-**Tela principal (dashboard operacional):**
-
-<!-- ![Dashboard](docs/img/dashboard.png) -->
-
-**Cadastro de catálogo (Produto → SKUs com variações):**
-
-<!-- ![Catálogo](docs/img/catalogo-produto.png) -->
-
-**Detalhe de pedido de marketplace (status + repasse + nota anexada):**
-
-<!-- ![Pedido](docs/img/pedido-marketplace.png) -->
-
-**Exemplo de relatório financeiro (Fluxo de caixa / DRE):**
-
-<!-- ![DRE](docs/img/relatorio-dre.png) -->
-
-> Este projeto **não expõe Swagger UI / OpenAPI**; a API é REST (198 endpoints em 42 controllers) e é exercitada pela SPA e pela suíte de testes.
-
----
-
-## 12. Sobre o código-fonte
+## 11. Sobre o código-fonte
 
 O **código-fonte é privado** por conter regras de negócio, dados e configurações de um cliente real. Este repositório contém apenas **documentação**: descreve a arquitetura, as decisões técnicas e os trade-offs do projeto, sem expor credenciais, endpoints reais, dados ou lógica fiscal proprietária.
 
