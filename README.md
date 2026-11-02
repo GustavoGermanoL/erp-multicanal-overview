@@ -1,24 +1,39 @@
-# ERP Multicanal para E-commerce — Backend Java
+# ERP Multicanal para E-commerce
 
-Backend de um ERP que centraliza a operação de um e-commerce multicanal (catálogo, estoque, compras, vendas, fiscal e financeiro), integrando marketplaces e vendas B2B em um único sistema.
+ERP em produção que centraliza a operação de um e-commerce multicanal: catálogo, estoque, compras, vendas, fiscal e financeiro. Pedidos de marketplaces e vendas B2B passam pelo mesmo sistema e pelo mesmo estoque.
 
-> **Observação sobre este repositório:** o código-fonte é **privado** por conter regras de negócio de um cliente real. Este documento descreve a **arquitetura e as decisões técnicas** do projeto de forma genérica, sem expor dados, credenciais ou regras proprietárias. Ver a [nota final](#12-sobre-o-código-fonte).
+> **Observação sobre este repositório:** o código-fonte é **privado** por conter regras de negócio de um cliente real. Este documento descreve a **arquitetura e as decisões técnicas** de forma genérica, sem expor dados, credenciais ou regras proprietárias. Ver a [nota final](#12-sobre-o-código-fonte).
 
 ---
 
 ## 1. Visão geral
 
-Operar um e-commerce que vende em vários canais ao mesmo tempo cria um problema central: **um único estoque físico precisa abastecer vários marketplaces e um fluxo de venda B2B simultaneamente**, sem vender o mesmo item duas vezes (oversell) e sem que a operação vire um emaranhado de planilhas e painéis separados por canal.
+Um e-commerce que vende em vários canais tem **um único estoque físico abastecendo todos eles**. Sem um sistema central, a operação vira um conjunto de painéis e planilhas, e o saldo real deixa de ser conhecido.
 
-Este sistema resolve isso concentrando em um só backend:
+O sistema concentra:
 
-- **Catálogo** em três níveis (Categoria → Produto → SKU), sendo o SKU a unidade de estoque e venda.
-- **Estoque único** por SKU, compartilhado entre todos os canais.
-- **Integração com três marketplaces brasileiros** — Mercado Livre, Shopee e Magalu — para ingestão de pedidos, sincronização de estoque e perguntas.
-- **Vendas B2B** com pedido manual e emissão própria de NF-e.
-- **Fiscal** (importação/vínculo de NF-e emitidas pelos canais + emissão própria) e **financeiro** (contas a pagar, fluxo de caixa, DRE, repasse de marketplace).
+- **Catálogo** em três níveis (Categoria → Produto → SKU), com variações, fotos e **kits** (um anúncio que vende vários SKUs).
+- **Estoque único** por SKU, controlado por um livro de movimentações e compartilhado entre os canais.
+- **Integração com Mercado Livre e Shopee:** pedidos, status de envio, repasse, perguntas, etiquetas e envio de saldo para os anúncios.
+- **Compras:** importação do XML da nota de entrada, conversão de unidade por fornecedor e estorno de entrada.
+- **Vendas B2B:** pedido manual, condição de pagamento, comissão de representante e **emissão própria de NF-e**.
+- **Expedição e pós-venda:** lista de separação, etiquetas e devolução de cliente.
+- **Financeiro:** contas a pagar e a receber, boletos com remessa CNAB 240, fluxo de caixa, DRE, repasse de marketplace e fechamento fiscal para o contador.
 
-**Escala e porte (do próprio código):** monólito modular com **11 módulos Maven** (~24,5 mil linhas de Java em `src/main`), **198 endpoints REST** em 42 controllers, **80 migrações de banco** versionadas e **multi-tenant** (um mesmo deploy atende vários clientes isolados por linha). O modelo de catálogo/estoque foi desenhado para operar com catálogos de milhares de SKUs e múltiplos canais simultâneos.
+### Porte
+
+Números medidos no código em novembro de 2026:
+
+| Métrica | Valor |
+|---|--:|
+| Módulos Maven | 11 + frontend |
+| Java em `src/main` | ~37,6 mil linhas |
+| Java em `src/test` | ~37,4 mil linhas |
+| Testes automatizados | 1.528 |
+| Endpoints REST | 263, em 57 controllers |
+| Migrações de banco | 72 |
+| Frontend (TypeScript) | ~26,8 mil linhas, 73 páginas |
+| Commits | mais de 1.100 desde março de 2026 |
 
 ---
 
@@ -27,88 +42,85 @@ Este sistema resolve isso concentrando em um só backend:
 | Tecnologia | Versão | Para que é usada |
 |---|---|---|
 | Java | 21 | Linguagem base |
-| Spring Boot | 3.3.6 | Web, Data JPA, Security, Validation, AMQP |
-| PostgreSQL | 17 (dev) | Banco relacional único |
-| Flyway | (gerenciado pelo Spring Boot) | Migrações de schema versionadas (80 scripts `V*.sql`) |
-| Hibernate ORM | (via Spring Data JPA) | Persistência + **multi-tenancy por discriminador** (`@TenantId`) |
-| RabbitMQ | 3.x | Barramento de eventos entre módulos (Spring AMQP) |
-| jjwt (JSON Web Token) | 0.12.6 | Autenticação stateless com access + refresh token |
-| Lombok | — | Redução de boilerplate |
-| OWASP dependency-check | (plugin Maven) | Verificação de vulnerabilidades em dependências |
-| React + TypeScript + Vite + Ant Design | 18 / 5 / 6 / 6 | Frontend (SPA) |
+| Spring Boot | 3.3.6 | Web, Data JPA, Security, Validation, agendamento |
+| PostgreSQL | 17 | Banco relacional único, também usado como fila de trabalho |
+| Flyway | gerenciado pelo Spring Boot | Migrações de schema versionadas |
+| Hibernate ORM | via Spring Data JPA | Persistência e **multi-tenancy por discriminador** (`@TenantId`) |
+| jjwt | 0.12.6 | Access token e refresh token |
+| Bibliotecas `nfe` e `java-danfe` | — | Comunicação com a SEFAZ e geração do DANFE |
+| Apache POI | — | Planilhas do fechamento fiscal |
+| React + TypeScript + Vite + Ant Design | 18 / 5 / 6 / 6 | Frontend (SPA), com TanStack Query e Recharts |
+| Docker Compose + Caddy | Caddy 2 | Produção em contêineres com TLS automático |
+| SonarQube | Community | Análise estática em ambiente local |
 
-Dependências **declaradas mas ainda não exercitadas** no código: **Resilience4j 2.2.0**, **Testcontainers 1.20.4** e **WireMock 3.9.2** — ver [seção 9](#9-estratégia-de-testes) para o porquê. São citadas aqui por honestidade: constam no `pom.xml`, mas nenhuma classe as utiliza hoje.
+Dependências **declaradas, mas não usadas por nenhuma classe**: Resilience4j, Testcontainers e WireMock. Ver a [seção 9](#9-estratégia-de-testes).
 
 ---
 
 ## 3. Arquitetura
 
-O sistema é um **monólito modular**: todos os módulos rodam no mesmo processo Spring Boot, mas com fronteiras explícitas de dependência definidas no Maven. A comunicação **entre módulos de domínio** é assíncrona, por eventos, passando por um **Transactional Outbox + RabbitMQ** — não por chamada direta de service para service.
+O sistema é um **monólito modular**: todos os módulos rodam no mesmo processo Spring Boot, com fronteiras de dependência definidas no Maven. Cada módulo segue as camadas `controller` → `service` → `repository` → entidades.
 
-Cada módulo segue camadas convencionais: `controller` (REST) → `service` (regra de negócio) → `repository` (Spring Data JPA) → entidades de domínio. Onde há acoplamento entre domínios (ex.: `sales` precisa de dados de integração), usa-se **ports** definidos no módulo consumidor e **adapters** implementados no módulo provedor, mantendo a direção de dependência estável (`integration → sales → common`).
+Os módulos conversam de três formas:
+
+1. **Chamada direta**, sempre no sentido permitido pelo Maven.
+2. **Ports e adapters**, quando o sentido precisa se inverter: o port fica no módulo consumidor e o adapter no provedor.
+3. **Eventos do Spring dentro do processo** (`@TransactionalEventListener`) e **filas em tabelas do PostgreSQL**, quando o trabalho deve acontecer depois do commit.
 
 ```mermaid
 graph TD
-    subgraph Frontend
-        FE[SPA React/TS]
+    FE["SPA React/TS"] -->|"REST + JWT"| APP
+
+    subgraph MONO["Monólito modular Spring Boot"]
+        APP["app<br/>bootstrap"]
+        INTEGRATION["integration<br/>conectores, webhooks, jobs, envio de saldo"]
+        PURCHASES["purchases"]
+        FINANCE["finance"]
+        ANALYTICS["analytics"]
+        FISCAL["fiscal"]
+        SALES["sales"]
+        REGISTRATION["registration"]
+        INVENTORY["inventory"]
+        CATALOG["catalog"]
+        COMMON["common<br/>auth, multi-tenancy, auditoria"]
+
+        INTEGRATION --> FISCAL
+        INTEGRATION --> SALES
+        PURCHASES --> FISCAL
+        PURCHASES --> INVENTORY
+        FINANCE --> FISCAL
+        FINANCE --> ANALYTICS
+        ANALYTICS --> SALES
+        FISCAL --> SALES
+        FISCAL --> REGISTRATION
+        SALES --> INVENTORY
+        SALES --> REGISTRATION
+        SALES --> CATALOG
+        REGISTRATION --> CATALOG
+        INVENTORY --> COMMON
+        CATALOG --> COMMON
     end
 
-    subgraph "Backend (monólito modular Spring Boot)"
-        direction TB
-        COMMON["common<br/>auth/JWT · multi-tenant · outbox · RabbitMQ config"]
-        CATALOG[catalog]
-        INVENTORY[inventory]
-        SALES[sales]
-        INTEGRATION["integration<br/>conectores marketplace"]
-        FISCAL[fiscal]
-        FINANCE[finance]
-        PURCHASES[purchases]
-        REGISTRATION[registration]
-        ANALYTICS[analytics]
-    end
-
-    DB[(PostgreSQL)]
-    MQ{{"RabbitMQ<br/>topic exchanges + DLQ"}}
-    MKT["Marketplaces<br/>ML · Shopee · Magalu"]
-
-    FE -->|REST + JWT| SALES
-    FE -->|REST + JWT| CATALOG
-    FE -->|REST + JWT| FINANCE
-
-    SALES -. publica evento .-> MQ
-    INVENTORY -. publica evento .-> MQ
-    FISCAL -. publica evento .-> MQ
-    PURCHASES -. publica evento .-> MQ
-    MQ -. entrega evento .-> INVENTORY
-    MQ -. entrega evento .-> FISCAL
-    MQ -. entrega evento .-> FINANCE
-    MQ -. entrega evento .-> INTEGRATION
-
-    INTEGRATION <-->|HTTP + webhooks| MKT
-
-    CATALOG --- DB
-    INVENTORY --- DB
-    SALES --- DB
-    FISCAL --- DB
-    FINANCE --- DB
-    COMMON --- DB
+    MONO --- DB[("PostgreSQL<br/>dados + filas")]
+    INTEGRATION <-->|"HTTP + webhooks"| MKT["Mercado Livre e Shopee"]
+    FISCAL <-->|"NF-e"| SEFAZ["SEFAZ"]
 ```
 
-**Módulos (por porte de código):**
+O diagrama mostra as dependências principais; todos os módulos também dependem de `common`.
 
 | Módulo | ~Linhas (main) | Responsabilidade |
 |---|--:|---|
-| `integration` | 7.800 | Conectores de marketplace, webhooks, jobs de polling, sync de estoque/preço |
-| `fiscal` | 3.800 | NF-e: importação/vínculo + emissão própria (B2B) |
-| `sales` | 3.200 | Pedidos, importação de pedidos de marketplace, listeners de eventos |
-| `common` | 2.200 | Transversal: auth/JWT, multi-tenancy, outbox, config RabbitMQ, auditoria |
-| `purchases` | 1.600 | Compras e importação de XML de nota de entrada |
-| `catalog` | 1.600 | Categoria/Produto/SKU e mapeamentos de plataforma |
-| `finance` | 1.400 | Contas a pagar, despesas, fluxo de caixa/DRE |
-| `registration` | 1.200 | Fornecedores e clientes |
-| `analytics` | 1.000 | Dashboards de vendas/margem |
-| `inventory` | 600 | Estoque com controle de concorrência |
-| `app` | 75 | Bootstrap/agregador |
+| `integration` | 10.000 | Conectores, webhooks, jobs de polling e reconciliação, envio de saldo, etiquetas |
+| `fiscal` | 6.700 | Emissão, cancelamento e recuperação de NF-e, DANFE, tributos aproximados, vínculo de notas, fechamento |
+| `sales` | 5.900 | Pedidos, importação de marketplace, estoque por pedido, separação, devolução, comissão |
+| `finance` | 3.900 | Contas a pagar e a receber, boletos, remessa CNAB 240, despesas, fluxo de caixa, DRE |
+| `catalog` | 2.600 | Categoria, Produto, SKU, vínculos com anúncios e kits |
+| `purchases` | 2.600 | Compras, XML de entrada, conversão de unidade, estorno |
+| `registration` | 2.100 | Clientes e fornecedores, com consulta cadastral |
+| `common` | 1.800 | Autenticação, multi-tenancy, criptografia, auditoria |
+| `analytics` | 1.200 | Dashboards de vendas e margem |
+| `inventory` | 800 | Posições e movimentos de estoque, fila de saldo |
+| `app` | 130 | Bootstrap, migrações e manual do usuário |
 
 ---
 
@@ -116,117 +128,142 @@ graph TD
 
 ### 4.1. Monólito modular em vez de microserviços
 
-- **Problema:** o domínio tem vários subdomínios (catálogo, estoque, vendas, fiscal, financeiro, integração) que precisam de fronteiras claras, mas o projeto é operado por uma equipe pequena.
-- **Alternativas:** microserviços independentes; monólito "espaguete" sem fronteiras; monólito modular.
-- **Escolha:** **monólito modular** — módulos Maven separados, com dependências direcionadas e comunicação por eventos, tudo em um processo.
-- **Por quê:** ganha-se separação de responsabilidades e a possibilidade futura de extrair um módulo, sem pagar o custo operacional de microserviços (rede, orquestração, observabilidade distribuída, transações distribuídas) numa fase que não precisa disso.
-- **Custo:** um deploy único (uma falha grave derruba tudo); a disciplina das fronteiras depende de convenção + revisão, não de isolamento físico; escala apenas verticalmente/por réplica do processo inteiro.
+- **Problema:** vários subdomínios precisam de fronteiras claras, mas a operação é pequena e roda em uma VPS de 4 GB.
+- **Escolha:** módulos Maven com dependências direcionadas, em um único processo.
+- **Por quê:** separa responsabilidades sem o custo de rede, orquestração e transações distribuídas.
+- **Custo:** um deploy único, em que uma falha grave derruba tudo. A escala é vertical, e algumas regras de negócio cruzam módulos.
 
-### 4.2. Comunicação entre módulos por Transactional Outbox + RabbitMQ
+### 4.2. Remoção do Transactional Outbox e do RabbitMQ
 
-- **Problema:** quando um módulo muda estado (ex.: confirma um pedido), outros precisam reagir (reservar estoque, preparar fiscal). Fazer isso com chamada síncrona direta acopla os módulos e cria o risco clássico de "gravou no banco mas o aviso se perdeu" (ou o inverso).
-- **Alternativas:** chamada direta de service; publicar direto no broker dentro da transação (dual-write, sujeito a inconsistência); eventos in-process do Spring; outbox transacional.
-- **Escolha:** **Transactional Outbox.** O evento é gravado numa tabela `outbox` **no mesmo commit** da operação de negócio; um `OutboxPoller` (`@Scheduled`, ~500ms) lê os pendentes e publica no RabbitMQ (um _topic exchange_ por domínio — vendas, estoque, fiscal, compras, financeiro), com **DLQ + retry** por fila.
-- **Por quê:** garante atomicidade entre "mudou o estado" e "vai avisar" (sem dual-write); desacopla produtor e consumidor; entrega *at-least-once* com dead-letter para falhas.
-- **Custo:** latência de até um ciclo de polling; consumidores precisam ser **idempotentes** (at-least-once pode reentregar); há um poller varrendo o banco periodicamente. Para coordenação leve e local, o projeto ainda usa eventos in-process do Spring (`ApplicationEventPublisher`), convivendo com o barramento.
+A primeira versão usava outbox transacional e RabbitMQ entre os módulos. **Essa decisão foi revertida** em setembro de 2026, antes do início da operação com pedidos reais.
 
-### 4.3. Multi-tenancy por discriminador (coluna `tenant_id`)
+- **O que uma auditoria encontrou:** o único produtor real do outbox era o envio de saldo. Não existia nenhum `@RabbitListener`, e as filas configuradas não tinham uso.
+- **O que o broker custava:** um contêiner de até 320 MB em uma VPS de 4 GB, dependência na subida da aplicação e um health check que caía junto com ele.
+- **O problema de fundo:** o evento levava o saldo do momento, e uma entrega atrasada podia publicar um número velho. A semântica de fila de mensagens não combinava com o problema, que é sincronizar **estado**.
+- **Escolha:** remover o outbox e o broker. Quando o envio de saldo foi para o PostgreSQL ([4.3](#43-envio-de-saldo-por-reconciliação-com-fila-no-postgresql)), nada mais precisava deles.
+- **Custo:** se houver várias instâncias, ou volume muito maior, a decisão precisa ser revista.
 
-- **Problema:** o mesmo deploy precisa atender múltiplos clientes com isolamento de dados, sem multiplicar a infraestrutura.
-- **Alternativas:** um banco por tenant; um schema por tenant; discriminador (coluna) em schema compartilhado.
-- **Escolha:** **discriminador** via `@TenantId` do Hibernate — todas as entidades multi-tenant estendem uma `@MappedSuperclass` com a coluna `tenant_id`; o Hibernate injeta o filtro automaticamente em todas as queries. O tenant é resolvido do JWT por um `TenantFilter` que popula um `TenantContext` (ThreadLocal).
-- **Por quê:** menor custo operacional (um banco, um pool, uma migração), e o filtro automático reduz o risco de "vazar" dados entre tenants por esquecimento numa query.
-- **Custo:** isolamento **lógico**, não físico (todos os tenants no mesmo banco); depende de o `TenantContext` estar sempre setado — daí a atenção especial em pontos fora do fluxo HTTP (consumidores de fila restauram o tenant a partir do header da mensagem).
+### 4.3. Envio de saldo por reconciliação, com fila no PostgreSQL
 
-### 4.4. Prevenção de oversell com lock pessimista
+- **Problema:** cada mudança de estoque precisa chegar aos anúncios. As chamadas podem falhar, atrasar ou repetir, e o canal pode ficar fora do ar.
+- **Escolha:** uma tabela de pendências com **uma linha por SKU desatualizado**, gravada na mesma transação do movimento de estoque. A fila guarda **qual SKU mudou, nunca o número**.
+- **Como funciona:** o worker reivindica linhas com `FOR UPDATE SKIP LOCKED` e um lease, lê o saldo atual, calcula o disponível de cada anúncio e envia. A linha é apagada no sucesso e, na falha, volta com backoff. Um job de reenvio periódico funciona como rede de segurança.
+- **Kits:** o disponível do anúncio é o menor `floor(disponível / quantidade)` entre os componentes.
+- **Por quê:** repetir ou atrasar não publica número velho, e a fila não cresce, porque guarda estado em vez de histórico.
+- **Custo:** a latência é a de um ciclo do worker, e o desenho parte da premissa de uma instância da aplicação.
 
-- **Problema:** com estoque único compartilhado entre canais, duas baixas concorrentes no mesmo SKU podem vender além do disponível.
-- **Alternativas:** lock otimista (`@Version` + retry); lock pessimista (`SELECT … FOR UPDATE`); serializar por fila.
-- **Escolha:** **lock pessimista** — o repositório de posição de estoque usa `@Lock(LockModeType.PESSIMISTIC_WRITE)` ao ler a linha do SKU durante reserva/baixa, garantindo exclusão mútua na linha até o commit.
-- **Por quê:** a operação de estoque é curta e o custo de um conflito (oversell) é alto; o lock pessimista evita o laço de retry do otimista sob concorrência real no mesmo item.
-- **Custo:** contenção se muitos pedidos disputam o mesmo SKU (as transações serializam naquela linha); exige manter as transações de estoque curtas para não segurar o lock. Detalhe de ciclo de vida do domínio: pedido de marketplace entra sem reservar e a baixa efetiva ocorre no despacho, o que reduz a janela de contenção.
+### 4.4. Multi-tenancy por discriminador
 
-### 4.5. Ingestão de pedidos redundante: webhook + catch-up por polling
+- **Problema:** atender mais de um cliente no mesmo deploy, sem multiplicar a infraestrutura. Hoje há um tenant em produção.
+- **Escolha:** coluna `tenant_id` com `@TenantId` do Hibernate, que filtra as queries automaticamente. O tenant vem do JWT.
+- **Custo:** o isolamento é lógico, não físico. O filtro **não alcança SQL nativo**, então essas queries levam o tenant explícito. Jobs fora do fluxo HTTP também precisam definir o tenant.
 
-- **Problema:** webhooks de marketplace **não são confiáveis** — podem atrasar, falhar ou não disparar (em sandbox, alguns nem disparam). Perder um pedido é inaceitável.
-- **Alternativas:** só webhook (rápido, mas frágil); só polling (confiável, mas custoso e com latência); os dois combinados.
-- **Escolha:** **webhook como caminho primário + jobs `@Scheduled` de catch-up/reconciliação** como rede de segurança. Há controllers de notificação (Mercado Livre, Shopee) e jobs agendados de polling (`MercadoLivreOrderReconcileJob`, `ShopeeOrderPollingJob`, `MagaluOrderPollingJob`, `MarketplaceInvoicePollingJob`, `MLQuestionPollingTask`) + um `OrderCatchupRunner`. Ver [seção 5](#5-pipeline-de-integração-com-marketplaces).
-- **Por quê:** o webhook dá latência baixa no caso normal; o polling garante que nada se perca no caso de falha, buscando o que o webhook não trouxe.
-- **Custo:** complexidade (dois caminhos para a mesma coisa) e necessidade de **idempotência** — o mesmo pedido pode chegar pelos dois caminhos e não pode ser importado em duplicata.
+### 4.5. Estoque por livro de movimentos, reconciliação e lock pessimista
 
-### 4.6. Autenticação stateless com refresh token persistido
+- **Problema:** um pedido de marketplace não percorre uma máquina de estados. Ele pode ser importado já enviado, pular etapas, ser cancelado depois de entregue, e o polling repete o mesmo status. Um listener por transição viraria uma malha de casos especiais.
+- **Escolha:** um único serviço move estoque por causa de pedido, por **reconciliação**. Ele deriva o estágio atual do saldo líquido dos movimentos, compara com o estágio desejado pelo status e aplica só a diferença. Ver a [seção 6](#6-controle-de-estoque).
+- **Concorrência:** lock pessimista na linha do pedido e na posição de cada SKU, sempre em **ordem alfabética de SKU** para evitar deadlock.
+- **Custo:** transações que tocam estoque precisam ser curtas, e pedidos que disputam o mesmo SKU são serializados.
 
-- **Problema:** autenticar uma SPA sem sessão de servidor, mantendo os tokens curtos por segurança, mas sem exigir login a cada poucos minutos.
-- **Alternativas:** sessão server-side; só um JWT longo (inseguro se vazar); access token curto + refresh token.
-- **Escolha:** **access token JWT curto** (enviado no corpo/`Authorization`) + **refresh token em cookie `httpOnly`**, com o refresh persistido no banco (entidade `RefreshToken`) para permitir rotação/revogação.
-- **Por quê:** access curto limita o dano de um vazamento; refresh em cookie `httpOnly` fica fora do alcance de JavaScript (mitiga XSS); persistir o refresh permite invalidá-lo no logout/rotação.
-- **Custo:** o refresh no banco reintroduz um ponto de estado (não é 100% stateless); é preciso cuidar de CSRF no fluxo de cookie e da renovação concorrente de token no cliente.
+### 4.6. Ingestão redundante de pedidos
+
+- **Problema:** webhooks atrasam, falham ou nem chegam, e perder um pedido é inaceitável.
+- **Escolha:** o webhook é só um **gatilho**, e há redes de segurança independentes. Ver a [seção 5](#5-pipeline-de-integração-com-marketplaces).
+- **Custo:** vários caminhos para a mesma coisa, o que exige idempotência em todos eles.
+
+### 4.7. Emissão de NF-e tratando a SEFAZ como fonte da verdade
+
+- **Problema:** a SEFAZ pode autorizar a nota e a resposta se perder. A transação local desfaz a gravação e devolve o número, enquanto a nota já existe para o fisco.
+- **Escolha:** a transmissão fica atrás de ports, com adapters para a biblioteca de NF-e, e existe um fluxo de **recuperação** que consulta a SEFAZ pela chave e registra no ERP a nota autorizada.
+- **Origem:** esse fluxo surgiu de um caso real em produção.
+- **Custo:** a nota recuperada só tem o protocolo, sem o XML, então fica sem DANFE. Ela volta a ocupar o número e pode ser cancelada.
+
+### 4.8. Autenticação com access token em memória e refresh em cookie
+
+- **Escolha:** access token JWT curto, guardado **só em memória** no frontend, e refresh token em cookie `HttpOnly`, `SameSite` e `Secure`, persistido no banco.
+- **Por quê:** nenhum token fica em `localStorage`, e o refresh pode ser rotacionado e revogado no servidor.
+- **Custo:** o refresh reintroduz estado no servidor, e a renovação no cliente precisa ser single-flight. Sem isso, requisições paralelas disputam um token que a rotação já revogou.
 
 ---
 
 ## 5. Pipeline de integração com marketplaces
 
-A ingestão de pedidos usa dois caminhos que se complementam:
+Os pedidos entram por quatro caminhos:
 
-1. **Webhook (primário).** O marketplace chama um endpoint de notificação; o sistema valida, registra e dispara a importação do pedido. Baixa latência no caminho feliz.
-2. **Catch-up por polling (rede de segurança).** Jobs agendados consultam periodicamente a API do marketplace atrás de pedidos/notas/perguntas que o webhook não trouxe, e importam o que estiver faltando.
+| Caminho | Quando roda | Papel |
+|---|---|---|
+| **Webhook** | A cada aviso do canal | Baixa latência no caso normal |
+| **Polling de pedidos** | A cada 5 minutos | Descobre pedidos que o webhook não trouxe |
+| **Reconciliação** | A cada 10 minutos | Atualiza o status dos pedidos em aberto |
+| **Catch-up** | Na subida da aplicação | Cobre o período em que o sistema esteve fora do ar |
 
-A **idempotência** é o que torna a redundância segura: cada pedido é identificado pelo seu ID no marketplace, então chegar pelos dois caminhos não gera duplicata — o segundo a chegar é reconhecido como já importado.
+O aviso é gravado em uma tabela e processado depois por um dispatcher agendado. Assim, a resposta ao canal é rápida e um aviso não se perde se o processamento falhar. Os dados do pedido sempre vêm da API do canal, e o ID externo garante que o mesmo pedido não seja importado duas vezes.
 
 ```mermaid
 sequenceDiagram
     participant MP as Marketplace
-    participant WH as Controller de Webhook
-    participant JOB as Job de Catch-up (@Scheduled)
-    participant IMP as Importador de Pedidos
+    participant WH as Webhook
+    participant TB as Tabela de avisos
+    participant DP as Dispatcher
+    participant JOB as Polling e reconciliação
+    participant IMP as Importador
     participant DB as PostgreSQL
 
-    Note over MP,IMP: Caminho primário (webhook)
-    MP->>WH: POST notificação (novo pedido)
-    WH->>IMP: importar(pedidoId)
-    IMP->>DB: pedido já existe?
-    alt novo
-        IMP->>MP: GET detalhes do pedido
-        IMP->>DB: grava pedido + evento (outbox)
-    else duplicado
-        IMP-->>WH: ignora (idempotente)
+    MP->>WH: POST aviso
+    WH->>TB: grava o aviso
+    WH-->>MP: 200
+    loop a cada ciclo
+        DP->>TB: lê avisos pendentes
+        DP->>IMP: importar(pedido)
     end
-
-    Note over JOB,IMP: Rede de segurança (polling)
     loop periodicamente
-        JOB->>MP: GET pedidos recentes
-        MP-->>JOB: lista de pedidos
-        JOB->>IMP: importar(pedidoId) para cada
-        IMP->>DB: pedido já existe?
-        alt faltando (webhook falhou)
-            IMP->>DB: grava pedido + evento (outbox)
-        else já importado
-            IMP-->>JOB: ignora (idempotente)
-        end
+        JOB->>MP: GET pedidos
+        JOB->>IMP: importar(pedido)
     end
+    IMP->>MP: GET detalhes do pedido
+    IMP->>DB: upsert pelo ID externo
+    IMP->>DB: reconcilia o estoque do pedido
 ```
+
+Outros pontos do pipeline:
+
+- **Item sem vínculo:** o pedido entra e aguarda o vínculo do anúncio com o SKU. Depois do vínculo, os pedidos pendentes são atualizados.
+- **Pacote do Mercado Livre:** um carrinho com vários itens vira um único pedido.
+- **Corte de estoque:** só pedidos posteriores à data da carga de saldo movem estoque. Assim, importar vendas antigas não desconta o saldo de novo.
+- **Dados financeiros:** taxas e frete de cada venda são sincronizados, e o líquido calculado foi conferido contra o valor real em uma amostra de pedidos.
+- **Saúde das conexões:** o health check mostra o estado dos tokens de cada canal, um problema que não dá sinal nenhum na tela até os pedidos pararem de entrar.
+
+Um conector para o Magalu chegou a ser escrito, mas a integração foi encerrada por uma restrição contratual da conta. O código está desligado por configuração.
 
 ---
 
 ## 6. Controle de estoque
 
-O estoque é **único por SKU** e compartilhado por todos os canais — não há saldo separado por marketplace. Isso elimina o problema de estoques desencontrados, mas concentra a concorrência: várias vendas podem tentar baixar o mesmo SKU ao mesmo tempo.
+Cada pedido tem um estágio de estoque, **derivado do livro de movimentos** e nunca gravado como um campo separado:
 
-**Estratégia de concorrência:** **lock pessimista de escrita** (`@Lock(LockModeType.PESSIMISTIC_WRITE)`) na posição de estoque. Ao reservar ou baixar, a transação faz um `SELECT … FOR UPDATE` na linha do SKU, obtendo exclusão mútua até o commit. Duas operações concorrentes no mesmo SKU serializam; operações em SKUs diferentes seguem em paralelo.
+| Status do pedido | Estágio desejado | Efeito |
+|---|---|---|
+| Rascunho ou cancelado | Nenhum | Libera a reserva ou devolve o que foi baixado |
+| Confirmado ou faturado | Reservado | Reserva o saldo |
+| Enviado ou entregue | Baixado | Baixa o saldo e libera a reserva |
 
-Para reduzir a janela de contenção, o ciclo de vida do pedido de marketplace **não reserva estoque na importação** — a baixa efetiva acontece quando o pedido avança para despachado. O cancelamento libera o que estava reservado, com proteção contra liberar mais do que foi reservado.
+Como o estágio vem do saldo líquido, repetir o mesmo status não faz nada, e compensar um movimento devolve o pedido ao estado anterior. Kits movem cada SKU componente. Pedido com item sem vínculo não move estoque, porque o sistema ainda não sabe qual SKU foi vendido.
+
+**A lição que levou a esse desenho:** a primeira versão baixava estoque em um método chamado apenas por um botão da tela, enquanto o pedido de marketplace recebia o status direto do canal. Cada peça estava correta e testada isoladamente, mas a ligação entre elas não existia. O defeito apareceu ao olhar dados reais: pedidos enviados sem nenhum movimento de saída. Isso motivou uma **auditoria por fluxo de ponta a ponta**, antes de entrar em operação, que encontrou outros defeitos da mesma classe.
 
 ---
 
-## 7. Módulo financeiro
+## 7. Módulo financeiro e fiscal
 
-O módulo financeiro (e o fiscal, que o alimenta) oferece, de forma genérica:
-
-- **Contas a pagar** — a partir de notas de entrada (compras) e de lançamentos manuais.
-- **Despesas** — inclusive recorrentes, materializadas periodicamente por um job agendado.
-- **Fluxo de caixa e DRE** — consolidação de entradas e saídas do período e demonstrativo de resultado.
-- **Contas a receber / repasse de marketplace** — estimativa do valor líquido de vendas em marketplace (valor bruto menos taxas do canal e frete).
-- **Fiscal — importação e conciliação de NF-e** — vínculo das notas que os canais já emitiram aos respectivos pedidos, e **emissão própria de NF-e** para a linha B2B.
+- **Contas a pagar**, a partir de notas de entrada e lançamentos manuais, e despesas recorrentes materializadas por um job.
+- **Contas a receber**, com parcelas geradas a partir da condição de pagamento do pedido.
+- **Boletos**, com remessa **CNAB 240** gerada campo a campo no layout do banco e registro de remessas recusadas.
+- **Fluxo de caixa e DRE**, consolidando entradas e saídas do período.
+- **Repasse de marketplace**, com o líquido da venda depois de taxas e frete.
+- **NF-e própria**, com emissão, cancelamento, recuperação, parcelas, frete, transporte, tributos aproximados por NCM e DANFE com modelo próprio.
+- **Correção e reemissão:** pedido sem nota válida pode ter os itens corrigidos antes de emitir de novo.
+- **Notas de marketplace**, importadas e vinculadas aos pedidos.
+- **Fechamento fiscal**, em planilha para o contador.
 
 > As regras fiscais específicas (tributos, CFOPs, cenários) não são detalhadas aqui por serem particulares do cliente.
 
@@ -234,96 +271,99 @@ O módulo financeiro (e o fiscal, que o alimenta) oferece, de forma genérica:
 
 ## 8. Segurança
 
-- **Autenticação JWT stateless.** Access token de vida curta assinado (jjwt), validado por um `JwtAuthenticationFilter` em cada requisição.
-- **Refresh token.** Emitido em cookie `httpOnly` e **persistido no banco**, permitindo rotação e revogação (logout invalida o refresh). O access token é renovado sem novo login enquanto o refresh for válido.
-- **Isolamento multi-tenant.** Cada requisição autenticada carrega o tenant; um `TenantFilter` popula o `TenantContext`, e o Hibernate aplica automaticamente o filtro por `tenant_id` em todas as queries. Consumidores de eventos (fora do fluxo HTTP) restauram o tenant a partir do cabeçalho da mensagem.
-- **Verificação de dependências.** OWASP dependency-check integrado ao build para detectar vulnerabilidades conhecidas nas bibliotecas.
+O sistema passou por uma auditoria interna seguida de cinco fases de correção e testes manuais antes de entrar em operação.
 
-> Esta seção descreve a **abordagem**; detalhes de implementação (segredos, tempos de expiração, chaves) não são expostos.
+- **Autenticação:** JWT curto, refresh com rotação e revogação no logout, e limite de tentativas de login.
+- **Autorização:** papéis com `@PreAuthorize` nos endpoints sensíveis, e actuator público restrito ao health.
+- **Isolamento de tenant:** o tenant vem do token validado, nunca de um cabeçalho enviado pelo cliente.
+- **Webhooks:** endpoints públicos limitados ao necessário, com validação de tópico ou assinatura conforme o canal.
+- **Segredos em repouso:** criptografia AES-GCM, usada por exemplo na senha do certificado A1.
+- **Cabeçalhos e CORS:** CSP, HSTS, `X-Frame-Options`, `Referrer-Policy` e lista de origens permitidas.
+- **Auditoria:** log estruturado de login, renovação, logout e acessos negados, com e-mail mascarado.
+- **Rede:** só o proxy reverso fica exposto, e a aplicação não publica porta.
+- **Dependências:** `npm audit` no frontend e OWASP dependency-check em um perfil Maven opcional, fora do build padrão.
+
+> Esta seção descreve a **abordagem**. Segredos, tempos de expiração e chaves não são expostos.
 
 ---
 
 ## 9. Estratégia de testes
 
-Números atuais da suíte:
+A última execução completa teve **1.528 testes, 0 falhas e 1 ignorado**, em 275 classes.
 
-- **507 métodos `@Test`** distribuídos em **120 arquivos** de teste.
-- **~29** classes com **Mockito** (`@Mock` / `MockitoExtension`) — testes unitários de serviço, isolando dependências.
-- **11** com **`@SpringBootTest`** — testes de integração com contexto Spring completo.
-- **9** com **`MockMvc` / `@WebMvcTest`** — testes da camada web (controllers).
-- **1** `@DataJpaTest` e **3** classes de integração/E2E de ponta a ponta (`*IT` / `*E2E*IT`).
-- O restante são testes unitários puros (JUnit) de lógica de domínio.
+| Tipo | Classes |
+|---|--:|
+| Unitários com Mockito | 62 |
+| `@SpringBootTest`, com PostgreSQL real | 51 |
+| `@WebMvcTest` | 9 |
+| `@DataJpaTest` | 7 |
+| Unitários puros, sem dublês | os demais |
 
-**Ferramentas:** **JUnit 5** (execução), **Mockito** (dublês em unitários), **Spring Boot Test / MockMvc** (integração e camada web).
+**O que foi priorizado:** regras de negócio dos serviços, importação de pedidos, ciclo de vida fiscal, estoque, formato do arquivo CNAB e autenticação. Os testes `@DataJpaTest` rodam o SQL real no PostgreSQL porque parte da lógica está em SQL nativo.
 
-**O que foi priorizado:** lógica de negócio dos serviços (a maior parte dos testes) e os fluxos críticos de integração — importação de pedidos de marketplace, ciclo de vida fiscal e autenticação.
+**A suíte não basta sozinha:** o principal defeito encontrado antes da operação passou por todos os testes ([seção 6](#6-controle-de-estoque)). Por isso as entregas também são conferidas em homologação fiscal, no navegador e contra os dados de produção, em modo somente leitura.
 
-**Limitações conhecidas (honestas):**
+**Limitações conhecidas:**
 
-- Os testes de **integração (`@SpringBootTest`) rodam contra um PostgreSQL real** (`ddl-auto: validate` + Flyway), **não** contra Testcontainers nem H2. Isso os torna fiéis ao banco de produção, mas **acopla a suíte a um banco provisionado** — não é totalmente auto-contida.
-- **Testcontainers, WireMock e Resilience4j constam no `pom.xml` mas ainda não são usados** por nenhuma classe. A evolução natural da suíte seria: Testcontainers para tornar os testes de integração auto-contidos, WireMock para simular as APIs de marketplace nos testes, e Resilience4j para resiliência (circuit breaker/retry) nas chamadas externas. Estão declarados, mas essa evolução ainda não foi feita.
+- Os testes de integração exigem um PostgreSQL provisionado, então a suíte não é auto-contida.
+- **Não há CI:** a suíte roda no script de release, na máquina de desenvolvimento, e bloqueia a publicação se falhar.
+- **Testcontainers, WireMock e Resilience4j constam no `pom.xml`, mas nenhuma classe os usa.** Seriam a evolução natural para tornar a suíte auto-contida, simular as APIs dos canais e dar resiliência às chamadas externas.
+- O frontend não tem testes automatizados, e o build com TypeScript é a única verificação automática.
 
 ---
 
-## 10. Como executar localmente
+## 10. Deploy e operação
 
-Pré-requisitos: **Docker** e **Docker Compose**.
+A produção são três contêineres em uma VPS de 4 GB, com limites de memória definidos a partir de medições:
 
-O sistema sobe com três contêineres: aplicação (Spring Boot), PostgreSQL e RabbitMQ.
-
-```yaml
-# docker-compose.yml (exemplo)
-services:
-  postgres:
-    image: postgres:17
-    environment:
-      POSTGRES_DB: ${DB_NAME}
-      POSTGRES_USER: ${DB_USER}
-      POSTGRES_PASSWORD: ${DB_PASSWORD}
-    ports: ["5432:5432"]
-
-  rabbitmq:
-    image: rabbitmq:3-management
-    environment:
-      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
-
-  app:
-    build: .
-    depends_on: [postgres, rabbitmq]
-    environment:
-      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${DB_NAME}
-      SPRING_DATASOURCE_USERNAME: ${DB_USER}
-      DB_PASSWORD: ${DB_PASSWORD}
-      SPRING_RABBITMQ_HOST: rabbitmq
-      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
-      JWT_SECRET: ${JWT_SECRET}
-    ports: ["8080:8080"]
+```mermaid
+graph LR
+    U[Usuários e webhooks] -->|HTTPS| C["Caddy<br/>TLS automático"]
+    C --> A["Aplicação<br/>JAR com a SPA"]
+    A --> P[("PostgreSQL 17")]
+    P -.->|backup diário| B["Armazenamento externo"]
+    M["Monitor externo"] -.->|health| C
 ```
 
-```dotenv
-# .env.example — copie para .env e preencha com valores locais
-DB_NAME=erp
-DB_USER=erp
-DB_PASSWORD=troque-me
-RABBITMQ_USER=erp
-RABBITMQ_PASSWORD=troque-me
-JWT_SECRET=uma-chave-secreta-longa-e-aleatoria
-# Credenciais de marketplace (OAuth) são configuradas fora do versionamento.
-```
+- **Publicar:** o script de release recusa alterações não commitadas, roda a suíte, gera a imagem Docker e a publica em um registro de contêineres.
+- **Atualizar:** o script do servidor faz um backup, sobe a nova versão, aguarda o health check e **reverte sozinho se ela não ficar saudável**. O downtime é de cerca de 40 segundos, e as migrações rodam na subida.
+- **Backup:** dump diário enviado para armazenamento externo, com o upload conferido e um script de teste de restauração.
+- **Monitoramento:** monitor externo sobre o health check, rotação de logs e estado das conexões de marketplace no health detalhado.
+
+### Execução local
+
+O código é privado, então isto serve só como referência do processo de desenvolvimento:
 
 ```bash
-cp .env.example .env      # e edite os valores
-docker compose up -d      # sobe postgres, rabbitmq e a aplicação
-# App disponível em http://localhost:8080
+# pré-requisito: PostgreSQL local
+./mvnw spring-boot:run -pl <app>   # backend em :8080; o Flyway aplica as migrações
+cd <frontend> && npm run dev       # frontend em :3000, com proxy para o backend
 ```
 
-Na primeira subida, o Flyway aplica as 80 migrações automaticamente. As integrações com marketplace exigem credenciais OAuth próprias; sem elas, o sistema opera normalmente nas funções que não dependem de canal externo.
+As integrações exigem credenciais OAuth próprias. Sem elas, o que não depende de canal externo funciona normalmente.
 
 ---
 
-## 11. Sobre o código-fonte
+## 11. Status do projeto
 
-O **código-fonte é privado** por conter regras de negócio, dados e configurações de um cliente real. Este repositório contém apenas **documentação**: descreve a arquitetura, as decisões técnicas e os trade-offs do projeto, sem expor credenciais, endpoints reais, dados ou lógica fiscal proprietária.
+**Em produção** desde agosto de 2026, com pedidos reais desde outubro de 2026.
 
-O objetivo é permitir a avaliação técnica do trabalho — organização em módulos, padrões aplicados (Transactional Outbox, multi-tenancy, controle de concorrência, ingestão redundante), qualidade de testes e clareza das decisões — sem comprometer a confidencialidade do cliente.
+| Área | Situação |
+|---|---|
+| Importação de pedidos do Mercado Livre e da Shopee | Em uso |
+| Estoque, compras, catálogo e separação | Em uso |
+| Emissão de NF-e própria | Em uso, com notas reais autorizadas |
+| Financeiro e fechamento fiscal | Implantados |
+| Boletos e remessa CNAB 240 | Implementados e em produção; a primeira remessa real ainda não foi enviada ao banco |
+| Envio de saldo e respostas aos canais | Implementados, em **dry-run**: o sistema calcula e registra, mas ainda não grava nos canais |
+| Magalu | Encerrado |
+
+Sair do dry-run é, de propósito, a última etapa: só depois que os vínculos e os saldos estiverem conferidos.
+
+---
+
+## 12. Sobre o código-fonte
+
+O **código-fonte é privado** por conter regras de negócio, dados e configurações de um cliente real. Este repositório contém apenas **documentação**, sem credenciais, endpoints reais, dados ou lógica fiscal proprietária.
+
+O objetivo é permitir a avaliação técnica do trabalho: organização em módulos, padrões aplicados, decisões revistas ao longo do projeto e limitações conhecidas.
